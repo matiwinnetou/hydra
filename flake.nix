@@ -12,7 +12,7 @@
     # The workbench flake inputs have some broken recursion in cardano-node
     # https://github.com/input-output-hk/cardano-node/pull/4865
     cardano-node = {
-      url = "github:input-output-hk/cardano-node/1.35.5";
+      url = "github:ch1bo/cardano-node/1.35.5-aarch64";
       inputs.node-measured.follows = "empty-flake";
       inputs.cardano-node-workbench.follows = "empty-flake";
     };
