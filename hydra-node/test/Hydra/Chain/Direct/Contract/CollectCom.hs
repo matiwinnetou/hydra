@@ -42,7 +42,7 @@ import Hydra.Contract.HeadTokens (headPolicyId)
 import Hydra.Contract.Util (UtilError (MintingOrBurningIsForbidden))
 import qualified Hydra.Data.ContestationPeriod as OnChain
 import qualified Hydra.Data.Party as OnChain
-import Hydra.Ledger.Cardano (genAdaOnlyUTxO, genTxIn, genVerificationKey)
+import Hydra.Ledger.Cardano (genAdaOnlyUTxO, genTxIn, genTxOutAdaOnly, genUTxO1, genVerificationKey)
 import Hydra.Party (Party, partyToChain)
 import Plutus.Orphans ()
 import Plutus.V2.Ledger.Api (toBuiltin, toData)
@@ -93,7 +93,7 @@ healthyCommits =
  where
   committedUTxO =
     generateWith
-      (replicateM (length healthyParties) genCommittableTxOut)
+      (replicateM (length healthyParties) $ genUTxO1 genTxOutAdaOnly)
       42
 
 healthyContestationPeriod :: OnChain.ContestationPeriod
@@ -144,7 +144,7 @@ data HealthyCommit = HealthyCommit
 
 healthyCommitOutput ::
   Party ->
-  (TxIn, TxOut CtxUTxO) ->
+  UTxO ->
   (TxIn, HealthyCommit)
 healthyCommitOutput party committed =
   ( txIn
@@ -165,12 +165,12 @@ healthyCommitOutput party committed =
     mkScriptAddress @PlutusScriptV2 testNetworkId commitScript
   commitValue =
     headValue
-      <> (txOutValue . snd) committed
+      <> foldMap txOutValue committed
       <> valueFromList
         [ (AssetId testPolicyId (assetNameFromVerificationKey cardanoKey), 1)
         ]
   commitDatum =
-    mkCommitDatum party (Just committed) (toPlutusCurrencySymbol $ headPolicyId healthyHeadInput)
+    mkCommitDatum party committed (toPlutusCurrencySymbol $ headPolicyId healthyHeadInput)
 
 data CollectComMutation
   = MutateOpenUTxOHash
