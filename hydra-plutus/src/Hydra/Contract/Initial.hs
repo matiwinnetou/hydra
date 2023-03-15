@@ -24,7 +24,6 @@ import Plutus.V2.Ledger.Api (
   ScriptContext (ScriptContext, scriptContextTxInfo),
   ToData (toBuiltinData),
   TokenName (unTokenName),
-  TxInInfo (txInInfoResolved),
   TxInfo (txInfoMint, txInfoSignatories),
   TxOut (txOutValue),
   TxOutRef,
@@ -33,7 +32,7 @@ import Plutus.V2.Ledger.Api (
   Value (getValue),
   mkValidatorScript,
  )
-import Plutus.V2.Ledger.Contexts (findDatum, findOwnInput, findTxInByTxOutRef, scriptOutputsAt, valueLockedBy)
+import Plutus.V2.Ledger.Contexts (TxInInfo (..), findDatum, findOwnInput, findTxInByTxOutRef, scriptOutputsAt, valueLockedBy)
 import PlutusTx (CompiledCode)
 import qualified PlutusTx
 import qualified PlutusTx.AssocMap as AssocMap
@@ -43,7 +42,7 @@ data InitialRedeemer
   = ViaAbort
   | ViaCommit
       { -- | Points to the committed Utxo.
-        committedRef :: Maybe TxOutRef
+        committedRefs :: [TxOutRef]
       }
 
 PlutusTx.unstableMakeIsData ''InitialRedeemer
@@ -75,18 +74,18 @@ validator commitValidator headId red context =
       traceIfFalse
         $(errorCode STNotBurned)
         (mustBurnST (txInfoMint $ scriptContextTxInfo context) headId)
-    ViaCommit{committedRef} ->
-      checkCommit commitValidator headId committedRef context
+    ViaCommit{committedRefs} ->
+      checkCommit commitValidator headId committedRefs context
 
 checkCommit ::
   -- | Commit validator
   ValidatorHash ->
   -- | Head id
   CurrencySymbol ->
-  Maybe TxOutRef ->
+  [TxOutRef] ->
   ScriptContext ->
   Bool
-checkCommit commitValidator headId committedRef context =
+checkCommit commitValidator headId committedRefs context =
   checkCommittedValue
     && checkLockedCommit
     && mustBeSignedByParticipant
@@ -97,17 +96,20 @@ checkCommit commitValidator headId committedRef context =
       lockedValue == initialValue + committedValue
 
   checkLockedCommit =
-    case (committedTxOut, lockedCommit) of
-      (Nothing, Nothing) ->
+    traceIfFalse $(errorCode MismatchCommittedTxOutInDatum) $
+      go (committedUTxO, lockedCommits)
+   where
+    go = \case
+      ([], []) ->
         True
-      (Nothing, Just{}) ->
+      ([], (_ : _)) ->
         traceError $(errorCode NothingCommittedButTxOutInOutputDatum)
-      (Just{}, Nothing) ->
+      ((_ : _), []) ->
         traceError $(errorCode CommittedTxOutButNothingInOutputDatum)
-      (Just (ref, txOut), Just Commit{input, preSerializedOutput}) ->
-        traceIfFalse $(errorCode MismatchCommittedTxOutInDatum) $
-          Builtins.serialiseData (toBuiltinData txOut) == preSerializedOutput
-            && ref == input
+      (TxInInfo{txInInfoOutRef, txInInfoResolved} : restCommitted, Commit{input, preSerializedOutput} : restCommits) ->
+        Builtins.serialiseData (toBuiltinData txInInfoResolved) == preSerializedOutput
+          && txInInfoOutRef == input
+          && go (restCommitted, restCommits)
 
   mustBeSignedByParticipant =
     traceIfFalse $(errorCode MissingOrInvalidCommitAuthor) $
@@ -125,15 +127,17 @@ checkCommit commitValidator headId committedRef context =
     maybe mempty (txOutValue . txInInfoResolved) $ findOwnInput context
 
   committedValue =
-    maybe mempty (txOutValue . snd) committedTxOut
+    foldMap (txOutValue . txInInfoResolved) committedUTxO
 
-  committedTxOut = do
-    ref <- committedRef
-    (ref,) . txInInfoResolved <$> findTxInByTxOutRef ref txInfo
+  committedUTxO = do
+    flip fmap committedRefs $ \ref ->
+      case findTxInByTxOutRef ref txInfo of
+        Nothing -> traceError "outref not found"
+        Just txInInfo -> txInInfo
 
   lockedValue = valueLockedBy txInfo commitValidator
 
-  lockedCommit =
+  lockedCommits =
     case scriptOutputsAt commitValidator txInfo of
       [(dat, _)] ->
         case dat of
@@ -145,8 +149,8 @@ checkCommit commitValidator headId committedRef context =
               Just da ->
                 case fromBuiltinData @Commit.DatumType $ getDatum da of
                   Nothing -> traceError $(errorCode ExpectedCommitDatumTypeGotSomethingElse)
-                  Just (_party, mCommit, _headId) ->
-                    mCommit
+                  Just (_party, commits, _headId) ->
+                    commits
       _ -> traceError $(errorCode ExpectedSingleCommitOutput)
 
   ScriptContext{scriptContextTxInfo = txInfo} = context
