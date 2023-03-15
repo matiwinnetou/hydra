@@ -356,9 +356,6 @@ handleAppEvent s = \case
       NotEnoughFuel ->
         s & warn "Not enough Fuel. Please provide more to the internal wallet and try again."
           & stopPending
-      MoreThanOneUTxOCommitted ->
-        s & warn "Can only commit one UTxO. Please try again."
-          & stopPending
       InternalWalletError{reason} ->
         s & warn reason
           & stopPending
