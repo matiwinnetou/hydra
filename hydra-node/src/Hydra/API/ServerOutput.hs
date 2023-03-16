@@ -2,8 +2,12 @@
 
 module Hydra.API.ServerOutput where
 
-import Data.Aeson (Value (..), withObject, (.:))
+import Cardano.Binary (toStrictByteString)
+import Control.Lens ((?~))
+import Data.Aeson (Value (..), encode, withObject, (.:))
 import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.Lens (atKey)
+import qualified Data.ByteString.Lazy as LBS
 import Hydra.API.ClientInput (ClientInput (..))
 import Hydra.Chain (ChainStateType, HeadId, IsChainState, PostChainTx, PostTxError)
 import Hydra.Crypto (MultiSignature)
@@ -115,3 +119,48 @@ instance
     Greetings me -> Greetings <$> shrink me
     PostTxOnChainFailed p e -> PostTxOnChainFailed <$> shrink p <*> shrink e
     RolledBack -> []
+
+-- | Overwrite json encoded transaction and force display as CBOR.
+convertTxToCBOR :: IsChainState tx => TimedServerOutput tx -> LBS.ByteString
+convertTxToCBOR response =
+  -- NOTE: We deliberately pattern match on all constructors here to force
+  -- errors when introducing a new constructor to 'ServerOutput'.
+  case output response of
+    PeerConnected{} -> defaultResponse
+    PeerDisconnected{} -> defaultResponse
+    HeadIsInitializing{} -> defaultResponse
+    Committed{} -> defaultResponse
+    HeadIsOpen{} -> defaultResponse
+    HeadIsClosed{} -> defaultResponse
+    HeadIsContested{} -> defaultResponse
+    ReadyToFanout{} -> defaultResponse
+    HeadIsAborted{} -> defaultResponse
+    HeadIsFinalized{} -> defaultResponse
+    CommandFailed{clientInput} ->
+      handleClientInput clientInput defaultResponse
+    TxValid{Hydra.API.ServerOutput.transaction} ->
+      defaultResponse & atKey "transaction" ?~ displayTxAsCbor transaction
+    TxInvalid{Hydra.API.ServerOutput.transaction} ->
+      defaultResponse & atKey "transaction" ?~ displayTxAsCbor transaction
+    SnapshotConfirmed{} -> defaultResponse
+    GetUTxOResponse{} -> defaultResponse
+    InvalidInput{} -> defaultResponse
+    Greetings{} -> defaultResponse
+    PostTxOnChainFailed{} -> defaultResponse
+    RolledBack -> defaultResponse
+ where
+  defaultResponse = encode response
+  handleClientInput ci defResponse =
+    case ci of
+      Init -> defResponse
+      Abort -> defResponse
+      Commit{} -> defResponse
+      NewTx{Hydra.API.ClientInput.transaction} ->
+        defResponse & atKey "transaction" ?~ displayTxAsCbor transaction
+      GetUTxO -> defResponse
+      Close -> defResponse
+      Contest -> defResponse
+      Fanout -> defResponse
+
+  displayTxAsCbor tx =
+    String . decodeUtf8 $ toStrictByteString (toCBOR tx)

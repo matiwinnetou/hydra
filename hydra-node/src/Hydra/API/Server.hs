@@ -14,17 +14,20 @@ import Hydra.Prelude hiding (TVar, readTVar, seq)
 import Control.Concurrent.STM (TChan, dupTChan, readTChan)
 import qualified Control.Concurrent.STM as STM
 import Control.Concurrent.STM.TChan (newBroadcastTChanIO, writeTChan)
-import Control.Concurrent.STM.TVar (TVar, modifyTVar', newTVarIO, readTVar)
+import Control.Concurrent.STM.TVar (TVar, modifyTVar', newTVarIO, readTVar, writeTVar)
 import Control.Exception (IOException)
 import qualified Data.Aeson as Aeson
 import Hydra.API.ClientInput (ClientInput)
-import Hydra.API.ServerOutput (ServerOutput (Greetings, InvalidInput), TimedServerOutput (..))
+import Hydra.API.ServerOutput (ServerOutput (..), TimedServerOutput (..), convertTxToCBOR)
 import Hydra.Chain (IsChainState)
+import Hydra.Ledger (IsTx)
 import Hydra.Logging (Tracer, traceWith)
-import Hydra.Network (IP, PortNumber)
+import Hydra.Network (IP, NodeId (..), PortNumber)
 import Hydra.Party (Party)
 import Hydra.Persistence (PersistenceIncremental (..))
 import Network.WebSockets (
+  PendingConnection (pendingRequest),
+  RequestHead (..),
   acceptRequest,
   receiveData,
   runServer,
@@ -33,6 +36,7 @@ import Network.WebSockets (
   withPingThread,
  )
 import Test.QuickCheck (oneof)
+import Text.URI
 
 data APIServerLog
   = APIServerStarted {listeningPort :: PortNumber}
@@ -80,13 +84,16 @@ withAPIServer host port party PersistenceIncremental{loadAll, append} tracer cal
   -- NOTE: we need to reverse the list because we store history in a reversed
   -- list in memory but in order on disk
   history <- newTVarIO (reverse h)
+  now <- getCurrentTime
+  serverStart <- newTVarIO now
 
   -- NOTE: We will add a 'Greetings' message on each API server start. This is
   -- important to make sure the latest configured 'party' is reaching the
   -- client.
   void $ appendToHistory history (Greetings party)
+
   race_
-    (runAPIServer host port tracer history callback responseChannel)
+    (runAPIServer host port tracer history serverStart callback responseChannel)
     . action
     $ Server
       { sendOutput = \output -> do
@@ -119,20 +126,42 @@ runAPIServer ::
   PortNumber ->
   Tracer IO APIServerLog ->
   TVar [TimedServerOutput tx] ->
+  TVar UTCTime ->
   (ClientInput tx -> IO ()) ->
   TChan (TimedServerOutput tx) ->
   IO ()
-runAPIServer host port tracer history callback responseChannel = do
+runAPIServer host port tracer history serverStart callback responseChannel = do
   traceWith tracer (APIServerStarted port)
   handle onIOException $
     runServer (show host) (fromIntegral port) $ \pending -> do
+      let path = requestPath $ pendingRequest pending
+      queryParams <- uriQuery <$> mkURIBs path
+      -- serveTxCBOR <- shouldDisplayTxCBOR queryParams
       con <- acceptRequest pending
       chan <- STM.atomically $ dupTChan responseChannel
       traceWith tracer NewAPIConnection
-      forwardHistory con
+
+      dontServeHistory <- shouldNotServeHistory queryParams
+      if dontServeHistory
+        then do
+          now <- atomically $ readTVar serverStart
+          forwardHistory con (filter (\TimedServerOutput{time} -> time > now))
+        else forwardHistory con (filter (const True))
+
       withPingThread con 30 (pure ()) $
         race_ (receiveInputs con) (sendOutputs chan con)
  where
+  -- we want to serve the history unless client specifically asks us not to
+  shouldNotServeHistory qp = do
+    k <- mkQueryKey "history"
+    v <- mkQueryValue "0"
+    pure $ (QueryParam k v) `elem` qp
+
+  shouldDisplayTxCBOR qp = do
+    k <- mkQueryKey "tx-output"
+    v <- mkQueryValue "cbor"
+    pure $ (QueryParam k v) `elem` qp
+
   onIOException ioException =
     throwIO $
       RunServerException
@@ -143,7 +172,12 @@ runAPIServer host port tracer history callback responseChannel = do
 
   sendOutputs chan con = forever $ do
     response <- STM.atomically $ readTChan chan
+    traceShowM "response"
+    traceShowM response
+    -- let encodedResponse = Aeson.encode response
     let sentResponse = Aeson.encode response
+    -- let sentResponse =
+    --       bool encodedResponse (convertTxToCBOR response) txAsCbor
     sendTextData con sentResponse
     traceWith tracer (APIOutputSent $ toJSON response)
 
@@ -163,8 +197,9 @@ runAPIServer host port tracer history callback responseChannel = do
         sendTextData con $ Aeson.encode timedOutput
         traceWith tracer (APIInvalidInput e clientInput)
 
-  forwardHistory con = do
-    hist <- STM.atomically (readTVar history)
+  forwardHistory con predicate = do
+    hist' <- STM.atomically (readTVar history)
+    let hist = predicate hist'
     let encodeAndReverse xs serverOutput = Aeson.encode serverOutput : xs
     sendTextDatas con $ foldl' encodeAndReverse [] hist
 
