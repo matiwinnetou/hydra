@@ -15,6 +15,7 @@ import Hydra.Cardano.Api.Network (Network)
 import Hydra.Contract.CommitError (CommitError (..), errorCode)
 import Hydra.Contract.Util (hasST, mustBurnST)
 import Hydra.Data.Party (Party)
+import qualified Plutonomy
 import Plutus.Extras (ValidatorType, scriptValidatorHash, wrapValidator)
 import Plutus.V2.Ledger.Api (
   CurrencySymbol,
@@ -107,7 +108,8 @@ validator (_party, _commit, headId) r ctx =
 
 compiledValidator :: CompiledCode ValidatorType
 compiledValidator =
-  $$(PlutusTx.compile [||wrap validator||])
+  Plutonomy.optimizeUPLC
+    $$(PlutusTx.compile [||wrap validator||])
  where
   wrap = wrapValidator @DatumType @RedeemerType
 

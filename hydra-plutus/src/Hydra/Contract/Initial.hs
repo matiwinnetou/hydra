@@ -12,6 +12,7 @@ import qualified Hydra.Contract.Commit as Commit
 import Hydra.Contract.Error (errorCode)
 import Hydra.Contract.InitialError (InitialError (..))
 import Hydra.Contract.Util (mustBurnST, mustNotMintOrBurn)
+import qualified Plutonomy
 import Plutus.Extras (ValidatorType, scriptValidatorHash, wrapValidator)
 import Plutus.V2.Ledger.Api (
   CurrencySymbol,
@@ -158,7 +159,8 @@ checkCommit commitValidator headId committedRef context =
 
 compiledValidator :: CompiledCode ValidatorType
 compiledValidator =
-  $$(PlutusTx.compile [||wrap . validator||])
+  Plutonomy.optimizeUPLC
+    $$(PlutusTx.compile [||wrap . validator||])
     `PlutusTx.applyCode` PlutusTx.liftCode Commit.validatorHash
  where
   wrap = wrapValidator @DatumType @RedeemerType

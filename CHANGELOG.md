@@ -37,6 +37,8 @@ changes.
   + Collect the right value in `collect` transactions (had been dropped for cost
     reasons, but found a constant cost way to do it).
   + The right `headId` is enforced in `commit` transactions.
+  + Also, started using `plutonomy` to optimize the compiled scripts, which also
+    changes the script hash / addresses.
 
 ## [0.9.0] - 2023-03-02
 

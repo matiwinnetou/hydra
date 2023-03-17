@@ -14,6 +14,7 @@ import Hydra.Contract.HeadState (Input (..), Signature, SnapshotNumber, State (.
 import Hydra.Contract.Util (hasST, mustNotMintOrBurn, (===))
 import Hydra.Data.ContestationPeriod (ContestationPeriod, addContestationPeriod, milliseconds)
 import Hydra.Data.Party (Party (vkey))
+import qualified Plutonomy
 import Plutus.Extras (ValidatorType, scriptValidatorHash, wrapValidator)
 import Plutus.V1.Ledger.Time (fromMilliSeconds)
 import Plutus.V1.Ledger.Value (valueOf)
@@ -616,7 +617,7 @@ TxOutRef{txOutRefId, txOutRefIdx} `compareRef` TxOutRef{txOutRefId = id', txOutR
 
 compiledValidator :: CompiledCode ValidatorType
 compiledValidator =
-  $$(PlutusTx.compile [||wrap headValidator||])
+  Plutonomy.optimizeUPLC $$(PlutusTx.compile [||wrap headValidator||])
  where
   wrap = wrapValidator @DatumType @RedeemerType
 
