@@ -31,6 +31,13 @@ changes.
 - The hydra scripts are persisted in `hydra-plutus/scripts` and golden tests
   ensure they are not changed accidentally.
 
+- **BREAKING** Changed the `hydra-plutus` scripts to address short-comings:
+  + Check contract continuity of state machine, i.e. that the output with the
+    state datum and ST is actually owned by vHead.
+  + Collect the right value in `collect` transactions (had been dropped for cost
+    reasons, but found a constant cost way to do it).
+  + The right `headId` is enforced in `commit` transactions.
+
 ## [0.9.0] - 2023-03-02
 
 :dragon_face: Renamed the repository from `hydra-poc` to [`hydra`](https://github.com/input-output-hk/hydra)!
